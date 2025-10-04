@@ -1,0 +1,77 @@
+# .github/workflows/split_repo_from_url.yml
+
+name: Split Subdirectory From URL
+
+on:
+  workflow_dispatch:
+    inputs:
+      # 1. 输入简化：现在只需要一个源目录 URL
+      source_dir_url:
+        description: '要拆分的源目录的完整 URL'
+        required: true
+        default: 'https://github.com/immortalwrt/luci/tree/master/applications/luci-app-zerotier'
+      new_repo_name:
+        description: '新仓库的名称 (e.g., luci-app-zerotier-standalone)'
+        required: true
+
+jobs:
+  split-repository:
+    runs-on: ubuntu-latest
+    steps:
+      # 步骤一：新增的 URL 解析步骤
+      - name: 1. Parse Input URL
+        id: parser
+        run: |
+          URL="${{ inputs.source_dir_url }}"
+          
+          # 移除协议和域名部分，方便处理
+          NO_PROTO_URL=$(echo "$URL" | sed -e 's;https://github.com/;;')
+          
+          # 提取仓库部分 (owner/repo)
+          OWNER_REPO=$(echo "$NO_PROTO_URL" | cut -d'/' -f1-2)
+          REPO_URL="https://github.com/$OWNER_REPO"
+          
+          # 提取子目录路径 (tree/branch/ 之后的所有内容)
+          SUBDIR_PATH=$(echo "$NO_PROTO_URL" | sed -e "s;$OWNER_REPO/tree/[^/]\+/;;")
+          
+          # 将解析结果设置为输出，供后续步骤使用
+          echo "REPO_URL=$REPO_URL" >> $GITHUB_OUTPUT
+          echo "SUBDIR_PATH=$SUBDIR_PATH" >> $GITHUB_OUTPUT
+
+      # 步骤二：安装依赖
+      - name: 2. Set up Python and install git-filter-repo
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+      - run: pip install git-filter-repo
+
+      # 步骤三：使用 PAT 来创建新仓库
+      - name: 3. Create New Repository
+        run: |
+          gh repo create ${{ github.repository_owner }}/${{ inputs.new_repo_name }} --private -d "Split from ${{ steps.parser.outputs.SUBDIR_PATH }} of ${{ steps.parser.outputs.REPO_URL }}"
+        env:
+          # VVV IMPORTANT: 使用我们自己创建的 PAT，而不是 GITHUB_TOKEN
+          GITHUB_TOKEN: ${{ secrets.ACTION_PAT }}
+      
+      - name: 4. Clone source repository
+        run: git clone --mirror ${{ steps.parser.outputs.REPO_URL }} source-mirror
+
+      - name: 5. Filter the subdirectory
+        run: |
+          cd source-mirror
+          git-filter-repo --path ${{ steps.parser.outputs.SUBDIR_PATH }}
+      
+      # 步骤六：使用 PAT 来推送代码
+      - name: 6. Push to new repository
+        run: |
+          cd source-mirror
+          # VVV IMPORTANT: 使用 PAT 来进行认证
+          git remote add new_origin "https://x-access-token:${{ secrets.ACTION_PAT }}@github.com/${{ github.repository_owner }}/${{ inputs.new_repo_name }}.git"
+          git push --all new_origin
+          git push --tags new_origin
+      
+      # 步骤七：打印成功信息
+      - name: 7. Print new repository URL
+        run: |
+          echo "✅ New repository created successfully!"
+          echo "Access it here: https://github.com/${{ github.repository_owner }}/${{ inputs.new_repo_name }}"
