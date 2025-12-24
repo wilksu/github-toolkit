@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       video_id:
-        description: 'Manual Video ID (Optional)'
+        description: 'Manual Video ID'
         required: false
 
 jobs:
@@ -22,23 +22,27 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          python3 -m pip install yt-dlp
+          python3 -m pip install -U yt-dlp
+
+      - name: Prepare YouTube Cookies
+        run: |
+          echo "${{ secrets.YT_COOKIE_CONTENT }}" > youtube_cookies.txt
 
       - name: Random Delay
-        run: sleep $(( (RANDOM % 600) + 1 ))
+        run: sleep $(( (RANDOM % 60) + 1 ))
 
       - name: Download Audio
         run: |
           mkdir -p downloads
+          # 基础参数
+          YT_OPTS="-x --audio-format mp3 --audio-quality 0 --cookies youtube_cookies.txt --no-warnings"
+          
           if [ -n "${{ github.event.inputs.video_id }}" ]; then
-            yt-dlp -x --audio-format mp3 --audio-quality 0 -o "downloads/%(title)s.%(ext)s" "https://www.youtube.com/watch?v=${{ github.event.inputs.video_id }}"
+            yt-dlp $YT_OPTS -o "downloads/%(title)s.%(ext)s" "https://www.youtube.com/watch?v=${{ github.event.inputs.video_id }}"
           else
             IFS=',' read -ra ADDR <<< "${{ vars.YT_CHANNELS }}"
             for url in "${ADDR[@]}"; do
-              yt-dlp -x --audio-format mp3 --audio-quality 0 \
-                --dateafter today-26hours \
-                -o "downloads/%(title)s.%(ext)s" \
-                "$url"
+              yt-dlp $YT_OPTS --dateafter today-26hours -o "downloads/%(title)s.%(ext)s" "$url"
             done
           fi
 
@@ -52,30 +56,19 @@ jobs:
 
           async function main() {
             const dir = './downloads'
-            if (!fs.existsSync(dir)) {
-              console.log('No files to upload.')
-              return
-            }
+            if (!fs.existsSync(dir)) return
             const files = fs.readdirSync(dir).filter(f => f.endsWith('.mp3'))
             
             for (const file of files) {
               const filePath = path.join(dir, file)
-              console.log('Processing:', file)
               try {
                 const res = await cloud_upload({
-                  file: {
-                    name: file,
-                    data: fs.readFileSync(filePath)
-                  },
+                  file: { name: file, data: fs.readFileSync(filePath) },
                   cookie: process.env.NETEASE_COOKIE
                 })
-                if (res.status === 200) {
-                  console.log('Successfully uploaded:', file)
-                } else {
-                  console.log('Upload response:', res.status, res.body)
-                }
+                console.log(file, 'Result:', res.status)
               } catch (e) {
-                console.error('Upload failed for:', file, e.message)
+                console.error(file, 'Failed:', e.message)
               }
             }
           }
@@ -84,3 +77,6 @@ jobs:
           node upload.js
         env:
           NETEASE_COOKIE: ${{ secrets.NETEASE_COOKIE }}
+
+      - name: Cleanup
+        run: rm youtube_cookies.txt
